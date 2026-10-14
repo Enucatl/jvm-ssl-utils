@@ -13,3 +13,6 @@ log
 bundle
 /resources/locales.clj
 /dev-resources/i18n/bin
+/.vendor
+/vendor
+/Gemfile.lock
