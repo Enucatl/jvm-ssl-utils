@@ -53,6 +53,13 @@ jobs:
           LEIN_PROFILE: ${{ case(matrix.fips == 'fips-enabled', 'fips', 'dev') }}
         run: lein with-profile $LEIN_PROFILE test
         timeout-minutes: 30
+      - name: ML-DSA and RSA signing regression
+        if: matrix.version == '25' && matrix.fips == 'fips-disabled'
+        run: |
+          test_classpath="$(lein with-profile dev classpath):target/test-classes"
+          mkdir -p target/test-classes
+          javac -cp "$test_classpath" -d target/test-classes test/java/com/puppetlabs/ssl_utils/IssuerSigningTest.java
+          java -ea -cp "$test_classpath" com.puppetlabs.ssl_utils.IssuerSigningTest
 
   tests:
     if: always()

@@ -108,6 +108,18 @@ public class SSLUtils {
 
     private static int crlLifetimeSeconds = 5 * 365 * 24 * 60 * 60;  // default to 5 years
 
+    private static String signatureAlgorithm(PrivateKey key, String rsaAlgorithm) {
+        String algorithm = key.getAlgorithm();
+        // The JDK calls parameterized ML-DSA keys "ML-DSA"; BC names the parameter set.
+        if ("ML-DSA-44".equalsIgnoreCase(algorithm) ||
+                ("ML-DSA".equalsIgnoreCase(algorithm) &&
+                 "2.16.840.1.101.3.4.3.17".equals(PrivateKeyInfo.getInstance(key.getEncoded())
+                         .getPrivateKeyAlgorithm().getAlgorithm().getId()))) {
+            return "ML-DSA-44";
+        }
+        return rsaAlgorithm;
+    }
+
     public static boolean isFIPS() {
         try {
             return getProviderClass().getCanonicalName().equals(FIPS_PROVIDER_CLASS);
@@ -229,7 +241,7 @@ public class SSLUtils {
         }
 
         return requestBuilder.build(
-                new JcaContentSignerBuilder("SHA1withRSA").
+                new JcaContentSignerBuilder(signatureAlgorithm(keyPair.getPrivate(), "SHA1withRSA")).
                         build(keyPair.getPrivate()));
     }
 
@@ -263,8 +275,22 @@ public class SSLUtils {
                                                   List<Map<String, Object>> extensions)
             throws IOException, OperatorCreationException, CertificateException
     {
+        return signCertificate(new X500Principal(new X500Name(PuppetCNStyle.INSTANCE, issuerDn).getEncoded()),
+                issuerPrivateKey, serialNumber, notBefore, notAfter, subjectDn, subjectPublicKey, extensions);
+    }
+
+    /** Sign a certificate preserving the issuer's original ASN.1 distinguished name. */
+    public static X509Certificate signCertificate(X500Principal issuerDn,
+                                                  PrivateKey issuerPrivateKey,
+                                                  BigInteger serialNumber,
+                                                  Date notBefore, Date notAfter,
+                                                  String subjectDn,
+                                                  PublicKey subjectPublicKey,
+                                                  List<Map<String, Object>> extensions)
+            throws IOException, OperatorCreationException, CertificateException
+    {
         X509v3CertificateBuilder certBuilder = new X509v3CertificateBuilder(
-                new X500Name(PuppetCNStyle.INSTANCE, issuerDn),
+                X500Name.getInstance(issuerDn.getEncoded()),
                 serialNumber,
                 notBefore,
                 notAfter,
@@ -283,7 +309,7 @@ public class SSLUtils {
             }
         }
 
-        JcaContentSignerBuilder builder = new JcaContentSignerBuilder("SHA256withRSA");
+        JcaContentSignerBuilder builder = new JcaContentSignerBuilder(signatureAlgorithm(issuerPrivateKey, "SHA256withRSA"));
 
         ContentSigner signer = builder.build(issuerPrivateKey);
 
@@ -342,7 +368,7 @@ public class SSLUtils {
                                  new JcaX509ExtensionUtils().createAuthorityKeyIdentifier(issuerPublicKey));
         }
         ContentSigner signer =
-            new JcaContentSignerBuilder("SHA256withRSA").build(issuerPrivateKey);
+            new JcaContentSignerBuilder(signatureAlgorithm(issuerPrivateKey, "SHA256withRSA")).build(issuerPrivateKey);
         return new JcaX509CRLConverter().getCRL(builder.build(signer));
     }
 
@@ -415,7 +441,7 @@ public class SSLUtils {
         }
 
         ContentSigner signer =
-                new JcaContentSignerBuilder("SHA256withRSA").build(issuerPrivateKey);
+                new JcaContentSignerBuilder(signatureAlgorithm(issuerPrivateKey, "SHA256withRSA")).build(issuerPrivateKey);
         return new JcaX509CRLConverter().getCRL(builder.build(signer));
     }
 
@@ -689,8 +715,8 @@ public class SSLUtils {
     public static boolean certMatchesPubKey(X509Certificate cert, PublicKey pubKey) {
         PublicKey extractedPubKey = cert.getPublicKey();
 
+        // Encoded keys include the algorithm OID; provider algorithm names can differ.
         return extractedPubKey.getFormat().equals(pubKey.getFormat()) &&
-            extractedPubKey.getAlgorithm().equals(pubKey.getAlgorithm()) &&
             Arrays.equals(extractedPubKey.getEncoded(), pubKey.getEncoded());
     }
 
@@ -828,8 +854,18 @@ public class SSLUtils {
           return converter.getKeyPair((PEMKeyPair) object).getPublic();
 
         else if (object instanceof PrivateKeyInfo) {
-          // See https://github.com/apache/nifi/blob/rel/nifi-1.9.2/nifi-toolkit/nifi-toolkit-tls/src/main/java/org/apache/nifi/toolkit/tls/util/TlsHelper.java#L243-L261
           PrivateKeyInfo keyHolder = (PrivateKeyInfo) object;
+          if ("2.16.840.1.101.3.4.3.17".equals(keyHolder.getPrivateKeyAlgorithm().getAlgorithm().getId())) {
+            try {
+              Provider provider = (Provider) getProviderClass().getConstructor().newInstance();
+              PrivateKey privateKey = new JcaPEMKeyConverter().setProvider(provider).getPrivateKey(keyHolder);
+              // Current FIPS jars lack ML-DSA classes; use BC's public derivation API reflectively.
+              return (PublicKey) privateKey.getClass().getMethod("getPublicKey").invoke(privateKey);
+            } catch (ReflectiveOperationException e) {
+              throw new PEMException("Unable to derive ML-DSA-44 public key", e);
+            }
+          }
+          // See https://github.com/apache/nifi/blob/rel/nifi-1.9.2/nifi-toolkit/nifi-toolkit-tls/src/main/java/org/apache/nifi/toolkit/tls/util/TlsHelper.java#L243-L261
           RSAPrivateKey keyStruct = RSAPrivateKey.getInstance(keyHolder.parsePrivateKey());
           RSAPublicKey pubKeySpec = new RSAPublicKey(keyStruct.getModulus(), keyStruct.getPublicExponent());
           AlgorithmIdentifier algId = new AlgorithmIdentifier(PKCSObjectIdentifiers.rsaEncryption, DERNull.INSTANCE);

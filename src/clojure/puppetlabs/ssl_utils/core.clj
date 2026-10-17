@@ -556,7 +556,7 @@
 
   Arguments:
 
-  `issuer-dn`:          a string containing the issuer's DN.
+  `issuer-dn`:          the issuer's DN string or X500Principal (preserves its DER).
   `issuer-priv-key`:    the issuer's private key.
   `serial`:             an arbitrary serial number integer.
   `not-before`:         the certificate's 'not before' date.
@@ -570,7 +570,7 @@
     subject-dn subject-pub-key]
    (sign-certificate issuer-dn issuer-priv-key serial not-before not-after
                       subject-dn subject-pub-key []))
-  ([issuer-dn :- ValidX500Name
+  ([issuer-dn :- (schema/conditional x500-principal? X500Principal :else ValidX500Name)
     issuer-priv-key :- PrivateKey
     serial :- schema/Int
     not-before :- Date

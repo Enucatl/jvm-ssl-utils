@@ -234,6 +234,14 @@
         (is (issued-by? certificate issuer))
         (is (= serial (get-serial certificate)))))
 
+    (testing "preserve the issuer principal's DER encoding"
+      (let [principal (X500Principal. issuer)
+            certificate (sign-certificate principal issuer-priv serial not-before
+                                          not-after subject subj-pub)]
+        (is (Arrays/equals (.getEncoded principal)
+                           (.getEncoded (.getIssuerX500Principal certificate))))
+        (.verify certificate issuer-pub)))
+
     (testing "signing extensions into certificate"
       (let [sign-exts     [(puppet-node-uid
                              "ED803750-E3C7-44F5-BB08-41A04433FE2E" false)
